@@ -1,12 +1,12 @@
 local _M = {
 	_VERSION	 = 'lua-hue-v2 0.0.1',
 	_DESCRIPTION = 'woot with a woot and maybe a heep',
-	_COPYRIGHT   = 'Copyright (C) Sam Orlando 2024 - MIT Cheese Please',	
+	_COPYRIGHT   = 'Copyright (C) Sam Orlando 2024 - MIT Cheese Please',
 }
 
-local rawget, rawset, setmetatable, getmetatable = rawget, rawset, setmetatable, getmetatable
-local type, pair, ipair = type, pair, ipair
-local concat, insert = table.concat, table.insert
+local rawget, setmetatable, getmetatable = rawget, setmetatable, getmetatable
+local type = type
+local concat = table.concat
 local jro = require ('jsonreq').new
 
 -- removed meta because of potential methods using global rawget, etc before localization
@@ -17,7 +17,6 @@ _M.meta = {
 	},
 	hr = { -- hue resource metatable
 		methods = {},
-		__call = function(self, ...) end,
 		__index = function(self, key) return rawget(getmetatable(self), "methods")[key] or rawget(self, key) end,
 	}
 }
@@ -25,7 +24,7 @@ _M.meta = {
 function _M.new(opt)  -- new bridge contains all data
 	opt = opt or {}
 	if type(opt) == "string" then opt = {host=opt} end
-	
+
 	local tbl = {
 		api = jro('https://' .. opt.host .. '/clip/v2'),
 		base = jro('https://' .. opt.host),
@@ -33,9 +32,9 @@ function _M.new(opt)  -- new bridge contains all data
 		enabled = opt.enabled and opt.enabled or true,
 		data = {}, -- cache table of all our walks of the api
 	}
-	
+
 	if tbl.key then tbl.api.headers['hue-application-key'] = tbl.key end
-	
+
 	return setmetatable(tbl, _M.meta.hb)
 end
 
@@ -100,7 +99,7 @@ end
 -- function hr:owner() return self.data.owner and self.bridge:get(self.data.owner.rid) end
 
 
--- The following is for direct calls and results bypassing any usage of convience objects 
+-- The following is for direct calls and results bypassing any usage of convience objects
 function hb:resources() return self.api:get('/resource') end
 
 local fs = '/' -- field sep
