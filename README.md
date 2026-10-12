@@ -1,7 +1,7 @@
 # lua-hue-v2
 
 Philips Hue **CLIP API v2** client for Lua 5.1–5.4 and LuaJIT, built on
-[lua-jsonreq](https://git.nodex.net:9002/odi/lua-jsonreq) (>= 0.1.0).
+[lua-jsonreq](https://github.com/SamOrlando/lua-jsonreq) (>= 0.1.0).
 
 ## Install
 
@@ -79,3 +79,7 @@ Uses a fake bridge transport; no hardware needed.
 ## License
 
 MIT
+
+## Related projects
+
+- [lua-jsonreq](https://github.com/SamOrlando/lua-jsonreq) — JSON-over-HTTP request helper (dependency of this library)
