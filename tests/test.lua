@@ -27,7 +27,12 @@ local function bridge(routes)
 	end
 	return t, log
 end
-local RES = { data = { { id = "L1", type = "light" }, { id = "S1", type = "scene" }, { id = "R1", type = "room" } }, errors = {} }
+local RES = { data = {
+	{ id = "L1", type = "light", on = { on = true }, metadata = { name = "Lamp" }, owner = { rid = "D1", rtype = "device" } },
+	{ id = "S1", type = "scene", metadata = { name = "Relax" } },
+	{ id = "R1", type = "room" },
+	{ id = "D1", type = "device", metadata = { name = "Bulb" } },
+}, errors = {} }
 local function ok200(v) return function() return 200, v end end
 local default_routes = {
 	["POST /api"] = ok200({ { success = { username = "NEWKEY", clientkey = "CK" } } }),
@@ -90,7 +95,7 @@ test("walk() caches by type with legacy plural alias", function()
 	assert(all.light.L1 and all.scene.S1 and all.room.R1)
 	eq(b.data.lights, b.data.light)
 	eq(getmetatable(all.light.L1), hue.meta.hr)
-	local n = 0; for _ in pairs(b.data) do n = n + 1 end; eq(n, 3)
+	local n = 0; for _ in pairs(b.data) do n = n + 1 end; eq(n, 4)
 end)
 
 test("walk(name) consistent keys, restricted names", function()
@@ -136,7 +141,9 @@ test("resource methods: verbs and paths", function()
 		"bridges", "device_powers", "motions", "camera_motions", "temperatures", "light_levels", "buttons",
 		"light", "scene", "room", "zone", "bridge_home", "groups_lights", "device", "bridge", "device_power", "motion",
 		"camera_motion", "temperature", "light_level", "button", "scene_create", "scene_delete", "room_create",
-		"room_delete", "zone_create", "zone_delete", "device_delete", "light_on", "light_brightness", "light_effect" }) do
+		"room_delete", "zone_create", "zone_delete", "device_delete", "light_on", "light_brightness", "light_effect",
+		"set", "light_color", "light_temperature", "identify", "smart_scenes", "smart_scene", "smart_scene_create",
+		"smart_scene_delete", "relative_rotaries", "entertainment_configurations", "bell_buttons" }) do
 		eq(type(b[m]), "function", m)
 	end
 end)
@@ -151,6 +158,60 @@ end)
 test("check() helper", function()
 	eq(select(2, hue.check(nil, "x")), "x")
 	eq(hue.check({ data = {} }, 200).data[1], nil)
+end)
+
+test("color, mirek, and state bodies", function()
+	local x, y = hue.xy(1, 1, 1)
+	assert(math.abs(x - 0.3127) < 1e-3 and math.abs(y - 0.3290) < 1e-3)
+	local r, g, b = hue.rgb(x, y)
+	assert(math.abs(r - 1) < 1e-3 and math.abs(g - 1) < 1e-3 and math.abs(b - 1) < 1e-3)
+	eq(hue.mirek(2700), 370); eq(hue.kelvin(370), 2703); eq(hue.mirek(1000), 500); eq(hue.mirek(20000), 153)
+	local cx, cy = hue.clamp(x, y, "C"); eq(cx, x); eq(cy, y)
+	local ox, oy = hue.clamp(0.01, 0.01, "C")
+	local w1, w2, w3
+	local t = hue.gamut.C
+	local den = (t[2][2] - t[3][2]) * (t[1][1] - t[3][1]) + (t[3][1] - t[2][1]) * (t[1][2] - t[3][2])
+	w1 = ((t[2][2] - t[3][2]) * (ox - t[3][1]) + (t[3][1] - t[2][1]) * (oy - t[3][2])) / den
+	w2 = ((t[3][2] - t[1][2]) * (ox - t[3][1]) + (t[1][1] - t[3][1]) * (oy - t[3][2])) / den
+	w3 = 1 - w1 - w2
+	assert(w1 >= -1e-8 and w2 >= -1e-8 and w3 >= -1e-8)
+	eq(select(1, hue.clamp(0.3, 0.3, "nope")), nil)
+	local s = hue.state({ on = false, brightness = 0, kelvin = 2700, xy = { x = 0.4, y = 0.5 }, effect = "candle", alert = "breathe", duration = 200 })
+	eq(s.on.on, false); eq(s.dimming.brightness, 0); eq(s.color_temperature.mirek, 370)
+	eq(s.color.xy.x, 0.4); eq(s.effects.effect, "candle"); eq(s.alert.action, "breathe"); eq(s.dynamics.duration, 200)
+	local rec = hue.recall("dynamic_palette", 400, 20)
+	eq(rec.recall.action, "dynamic_palette"); eq(rec.recall.duration, 400); eq(rec.recall.dimming.brightness, 20)
+end)
+
+test("set, color, recall, identify, and cached resource verbs", function()
+	local b, log = mk({ key = "K" })
+	b:walk()
+	local function last() return log[#log] end
+	local lamp = b.data.light.L1
+	eq(lamp:label(), "Lamp"); eq(lamp:ref(), b.data.device.D1)
+	eq(lamp.on.on, true)
+	lamp:turn(false); eq(last().m, "PUT"); eq(json.decode(last().b).on.on, false)
+	b:light_color("L1", 0.4, 0.5); eq(json.decode(last().b).color.xy.y, 0.5)
+	b:light_temperature("L1", 2700); eq(json.decode(last().b).color_temperature.mirek, 370)
+	b:light_temperature("L1", 250); eq(json.decode(last().b).color_temperature.mirek, 250)
+	b:set("grouped_light", "G1", { on = true, brightness = 10, effect = "candle" })
+	local body = json.decode(last().b); eq(body.on.on, true); eq(body.dimming.brightness, 10); eq(body.effects, nil)
+	b:scene("S1", hue.recall("active")); eq(json.decode(last().b).recall.action, "active")
+	b.data.scene.S1:activate(nil, 300, 40); eq(json.decode(last().b).recall.duration, 300)
+	local b2, log2 = mk({ key = "K", routes = {
+		["/clip/v2/resource/smart_scene"] = ok200({ data = { { id = "SS", type = "smart_scene" } }, errors = {} }),
+		["/clip/v2/resource/entertainment_configuration"] = ok200({ data = { { id = "E1", type = "entertainment_configuration" } }, errors = {} }),
+		["PUT /clip/v2/resource/smart_scene/SS"] = ok200({ data = { { rid = "SS" } }, errors = {} }),
+		["PUT /clip/v2/resource/entertainment_configuration/E1"] = ok200({ data = {}, errors = {} }),
+	} })
+	local smart = assert(b2:walk("smart_scenes")).SS
+	smart:activate(); eq(json.decode(log2[#log2].b).recall.action, "activate")
+	local cfg = assert(b2:walk("entertainment_configurations")).E1
+	cfg:stream("stop"); eq(log2[#log2].m, "PUT"); eq(json.decode(log2[#log2].b).action, "stop")
+	b:identify("device", "D1"); eq(json.decode(last().b).identify.action, "identify")
+	b.data.scene.S1:remove(); eq(log[#log].m, "DELETE"); assert(log[#log].url:find("/resource/scene/S1$"))
+	local kept, err = b.data.light.L1:remove(); eq(kept, nil); eq(err, "not deletable")
+	local nope, why = b.data.room.R1:turn(true); eq(nope, nil); eq(why, "not a light")
 end)
 
 test("no globals leaked", function()

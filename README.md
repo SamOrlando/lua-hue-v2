@@ -6,7 +6,7 @@ Philips Hue **CLIP API v2** client for Lua 5.1–5.4 and LuaJIT, built on
 ## Install
 
 ```sh
-luarocks make rockspecs/lua-hue-v2-0.1.1-1.rockspec
+luarocks make rockspecs/lua-hue-v2-0.2.0-1.rockspec
 ```
 
 ## Quick start
@@ -28,6 +28,9 @@ for id, light in pairs(b.data.light or {}) do print(id, light.metadata and light
 
 b:light_on("<light id>", true)
 b:light_brightness("<light id>", 40)
+b:light_color("<light id>", hue.xy(255, 180, 40))
+b:light_temperature("<light id>", 2700)          -- kelvin above 500; 153-500 is mirek
+b:scene("<scene id>", hue.recall("active"))
 ```
 
 ## `hue.new(opt)` (or `hue.new(host)`)
@@ -52,21 +55,27 @@ b:light_brightness("<light id>", 40)
   (`"lights"`) or a type (`"light"`). Failures return `nil, err, code, errors`.
   `b.data.lights` still works as an alias of `b.data.light`.
 * `get(id [, type])` → cached resource
-* Raw API calls return jsonreq results (`body, code, headers, raw` or `nil, err`):
-  `resources()`, and for each resource type a collection getter plus `x(id)` (GET) / `x(id, tbl)` (PUT):
-
-| collection | single | extras |
-|---|---|---|
-| `lights` | `light` | `light_on(id, bool)`, `light_brightness(id, 0-100)`, `light_effect(id, name)` |
-| `scenes` | `scene` | `scene_create(tbl)`, `scene_delete(id)` |
-| `rooms` | `room` | `room_create`, `room_delete` |
-| `zones` | `zone` | `zone_create`, `zone_delete` |
-| `grouped_lights` | `grouped_light` (alias `groups_lights`) | |
-| `devices` | `device` | `device_delete` |
-| `bridge_homes` | `bridge_home(id)` (read only) | |
-| `bridges`, `device_powers`, `motions`, `camera_motions`, `temperatures`, `light_levels`, `buttons` | singular forms | |
-
+* `hue.state(fields)` builds a light or grouped_light PUT body from `on`, `brightness` (0–100),
+  `mirek` or `kelvin`, `xy` (`{x, y}`), `effect`, `alert`, `duration` (ms), `gradient`, `timed_effect`.
+  `b:set(type, id, fields)` sends it. Effects, gradient, and timed effects are sent only for `light`.
+* `hue.recall(action [, duration, brightness])` builds a scene or smart-scene recall body.
+  Scene actions are `active`, `dynamic_palette`, `static`. Smart-scene actions are `activate`, `deactivate`.
+* `hue.xy(r, g, b)` / `hue.rgb(x, y [, Y])` convert sRGB and CIE xy. Channels are 0–1 or 0–255.
+  `hue.mirek(kelvin)` / `hue.kelvin(mirek)` clamp to the CLIP range 153–500.
+  `hue.clamp(x, y, gamut)` projects xy into gamut `"A"`, `"B"`, or `"C"`.
+* `b:light_on(id, bool)`, `b:light_brightness(id, 0-100)`, `b:light_effect(id, name)`,
+  `b:light_color(id, x, y)`, `b:light_temperature(id, t)` (`t <= 500` is mirek, otherwise kelvin),
+  `b:identify(type, id)`.
+* After `walk`, a cached resource has `label()`, `ref()` (owner in the cache), `update(body)`,
+  `remove()`, and, by type, `turn(bool)` / `apply(fields)`, `activate(...)`, `stream(action)`.
+  Method names stay off Hue fields such as `on` and `owner`, so those values remain readable.
+* Raw calls return jsonreq results (`body, code, headers, raw` or `nil, err`).
+  Plural getters (`lights`, `smart_scenes`, `relative_rotaries`, …) and `type(id)` / `type(id, body)`
+  cover the OpenHue CLIP v2 catalog. `scene`, `smart_scene`, `room`, and `zone` also have `_create`
+  and `_delete`. `device` has `_delete`. `bridge_home` is read only. `grouped_light` is also `groups_lights`.
 * `hue.check(body, code)` → `body, code` or `nil, err, code, errors` (turns a Hue `errors` array or HTTP >= 400 into an error)
+
+`GET /eventstream/clip/v2` is the bridge event stream. This client does not keep that connection open.
 
 ## Tests
 
