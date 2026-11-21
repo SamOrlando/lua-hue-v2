@@ -77,6 +77,123 @@ b:scene("<scene id>", hue.recall("active"))
 
 `GET /eventstream/clip/v2` is the bridge event stream. This client does not keep that connection open.
 
+## Examples
+
+Later snippets reuse `b`, `find`, `lamp`, and `room` from the earlier ones.
+
+Find a light by name, then drive the cached object. `turn` and `apply` are methods because a light resource already has an `on` field.
+
+```lua
+local hue = require("hue-v2")
+local b = hue.new({ host = "192.168.1.20", key = os.getenv("HUE_KEY") })
+assert(b:walk())
+
+local function find(rtype, name)
+  for id, r in pairs(b.data[rtype] or {}) do
+    if r:label() == name then return r end
+  end
+end
+
+local lamp = find("light", "Reading lamp")
+lamp:turn(true)
+lamp:apply({ brightness = 25, kelvin = 2700, duration = 800 })
+print(lamp.id, lamp:label(), lamp:ref() and lamp:ref():label())
+```
+
+Refresh one collection, or look up an id already in the cache.
+
+```lua
+local lights, err = b:walk("lights")   -- also accepts "light"
+if not lights then error(err) end
+
+local known = b:get("<light id>", "light")
+known:apply({ effect = "candle" })
+b:light_effect(known.id, "no_effect")
+```
+
+Color is CIE xy. Clamp into the bulb gamut before sending. `color.gamut_type` on the light is `"A"`, `"B"`, or `"C"`.
+
+```lua
+local x, y = hue.xy(255, 140, 40)
+local gamut = lamp.color and lamp.color.gamut_type
+if gamut ~= "A" and gamut ~= "B" and gamut ~= "C" then gamut = "C" end
+x, y = hue.clamp(x, y, gamut)
+b:light_color(lamp.id, x, y)
+
+-- read xy back as sRGB channels in 0-1. The third argument is relative luminance.
+if lamp.color and lamp.color.xy then
+  local r, g, bch = hue.rgb(lamp.color.xy.x, lamp.color.xy.y)
+  print(r, g, bch)
+end
+print(hue.kelvin(370))   -- 2703; mirek 153 is ~6500 K, 500 is 2000 K
+```
+
+A room's lights are the `grouped_light` service on that room. `set` accepts the same fields as `apply`.
+
+```lua
+local room = find("room", "Living room")
+for _, svc in ipairs(room.services or {}) do
+  if svc.rtype == "grouped_light" then
+    b:set("grouped_light", svc.rid, { on = true, brightness = 40, mirek = 300 })
+  end
+end
+```
+
+Recall a scene, or build one. `activate` defaults to `"active"` on a scene and `"activate"` on a smart scene.
+
+```lua
+local relax = find("scene", "Relax")
+relax:activate("active", 1000, 30)   -- action, transition ms, brightness
+
+b:smart_scene("<smart scene id>", hue.recall("deactivate"))
+
+local body, err, code = hue.check(b:scene_create({
+  metadata = { name = "Movie" },
+  group = { rid = room.id, rtype = "room" },
+  actions = {
+    {
+      target = { rid = lamp.id, rtype = "light" },
+      action = { on = { on = true }, dimming = { brightness = 15 } },
+    },
+  },
+}))
+if not body then error(err) end
+-- body.data[1].rid is the new scene; b:scene_delete(rid) removes it
+```
+
+Sensors are ordinary resources. `identify` flashes the device that owns a light.
+
+```lua
+for id, motion in pairs(b.data.motion or {}) do
+  local report = motion.motion and motion.motion.motion_report
+  if report and report.motion then print(id, "motion") end
+end
+for id, temp in pairs(b.data.temperature or {}) do
+  local report = temp.temperature and temp.temperature.temperature_report
+  print(id, report and report.temperature)   -- degrees Celsius
+end
+
+local owner = lamp:ref()
+if owner then b:identify(owner.type, owner.id) end
+```
+
+Entertainment configuration `stream` takes `"start"` or `"stop"`.
+
+```lua
+local area = find("entertainment_configuration", "TV")
+if area then area:stream("start") end
+```
+
+`walk` already returns `nil, err` when the bridge reports an error. Raw getters do not, so pass those through `hue.check`.
+
+```lua
+local data, err, code, errs = b:walk("buttons")
+if not data then print(err, code) end
+
+local body, err2 = hue.check(b:lights())
+if not body then print(err2) end
+```
+
 ## Tests
 
 ```sh
