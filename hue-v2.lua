@@ -1,5 +1,5 @@
 local _M = {
-	_VERSION     = 'lua-hue-v2 0.1.0',
+	_VERSION     = 'lua-hue-v2 0.1.1',
 	_DESCRIPTION = 'Philips Hue CLIP API v2 client (over lua-jsonreq)',
 	_COPYRIGHT   = 'Copyright (C) Sam Orlando 2024 - MIT Cheese Please',
 }
@@ -41,7 +41,7 @@ function _M.new(opt)  -- new bridge contains all data
 	end
 	local enabled = opt.enabled ~= false
 	local function client(url)
-		return jro({ url = url, enabled = enabled, timeout = opt.timeout, transport = opt.transport })
+		return jro({ url = url, enabled = enabled, timeout = opt.timeout or 30, transport = opt.transport })
 	end
 
 	local tbl = {

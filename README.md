@@ -6,7 +6,7 @@ Philips Hue **CLIP API v2** client for Lua 5.1–5.4 and LuaJIT, built on
 ## Install
 
 ```sh
-luarocks make rockspecs/lua-hue-v2-0.1.0-1.rockspec
+luarocks make rockspecs/lua-hue-v2-0.1.1-1.rockspec
 ```
 
 ## Quick start
@@ -38,7 +38,7 @@ b:light_brightness("<light id>", 40)
 | `key` | – | application key (`hue-application-key`) |
 | `clientkey` | – | stored for reference |
 | `devicetype` | `lua-hue-v2#<HOSTNAME>` | sent by `register()`; Hue limits `app#device` to 20#19 chars |
-| `timeout` | 30 s (`jsonreq.TIMEOUT`) | request timeout for every call |
+| `timeout` | 30 s | request timeout for every call |
 | `enabled` | `true` | `false` makes every call return `nil, "disabled"` |
 | `transport` | luasocket/luasec | custom request function (tests, proxies) |
 
