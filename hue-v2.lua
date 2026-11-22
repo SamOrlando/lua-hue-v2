@@ -1,7 +1,7 @@
 local _M = {
-	_VERSION     = 'lua-hue-v2 0.2.0',
+	_VERSION     = 'lua-hue-v2 0.2.1',
 	_DESCRIPTION = 'Philips Hue CLIP API v2 client (over lua-jsonreq)',
-	_COPYRIGHT   = 'Copyright (C) Sam Orlando 2024 - MIT Cheese Please',
+	_COPYRIGHT   = 'Copyright (C) Sam Orlando 2024-2026 - MIT',
 }
 
 local type, pairs, ipairs, tostring, setmetatable, rawget, getenv =
