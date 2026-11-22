@@ -1,24 +1,40 @@
 local _M = {
-	_VERSION     = 'lua-hue-v2 0.2.1',
+	_VERSION     = 'lua-hue-v2 0.2.2',
 	_DESCRIPTION = 'Philips Hue CLIP API v2 client (over lua-jsonreq)',
 	_COPYRIGHT   = 'Copyright (C) Sam Orlando 2024-2026 - MIT',
 }
 
-local type, pairs, ipairs, tostring, setmetatable, rawget, getenv =
-	type, pairs, ipairs, tostring, setmetatable, rawget, os.getenv
+local type, pairs, ipairs, tostring, setmetatable, rawget, rawset, getenv =
+	type, pairs, ipairs, tostring, setmetatable, rawget, rawset, os.getenv
 local concat = table.concat
 local floor = math.floor
 local jsonreq = require('jsonreq')
-local jro = jsonreq.new
 
 _M.meta = {
 	hb = { methods = {} }, -- hue bridge metatable
 	hr = { methods = {} }, -- hue resource metatable
 }
-_M.meta.hb.__index = _M.meta.hb.methods
 _M.meta.hr.__index = _M.meta.hr.methods
 local hb = _M.meta.hb.methods
 local hrm = _M.meta.hr.methods
+-- b.key is not a raw field: __newindex only runs for a missing key.
+local keys = setmetatable({}, { __mode = "k" })
+
+local function apply_key(self, key)
+	keys[self] = key
+	local headers = self.api and self.api.headers
+	if headers then headers["hue-application-key"] = type(key) == "string" and key or nil end
+end
+
+function _M.meta.hb.__index(self, k)
+	if k == "key" then return keys[self] end
+	return hb[k]
+end
+
+function _M.meta.hb.__newindex(self, k, v)
+	if k == "key" then return apply_key(self, v) end
+	rawset(self, k, v)
+end
 local collections = {} -- collection name or type -> resource type
 _M.collections = collections
 -- resource -> bridge, without a field the next PUT would send back
@@ -44,20 +60,19 @@ function _M.new(opt)
 	end
 	local enabled = opt.enabled ~= false
 	local function client(url)
-		return jro({ url = url, enabled = enabled, timeout = opt.timeout or 30, transport = opt.transport })
+		return jsonreq.new({ url = url, enabled = enabled, timeout = opt.timeout or 30, transport = opt.transport })
 	end
 
-	local tbl = {
+	local tbl = setmetatable({
 		api = client('https://' .. opt.host .. '/clip/v2'),
 		base = client('https://' .. opt.host),
-		key = opt.key,
 		clientkey = opt.clientkey,
 		devicetype = opt.devicetype or default_devicetype(),
 		enabled = enabled,
 		data = setmetatable({}, data_mt),
-	}
-	if tbl.key then tbl.api.headers['hue-application-key'] = tbl.key end
-	return setmetatable(tbl, _M.meta.hb)
+	}, _M.meta.hb)
+	tbl.key = opt.key
+	return tbl
 end
 
 -- body, code  |  nil, err, code, errors
@@ -82,7 +97,6 @@ _M.check = check
 function hb:register(key)
 	if key and type(key) == "string" then
 		self.key = key
-		self.api.headers['hue-application-key'] = key
 		return true, 200
 	end
 
@@ -92,7 +106,6 @@ function hb:register(key)
 	if type(r) == "table" and type(r.success) == "table" and r.success.username then
 		self.key = r.success.username
 		self.clientkey = r.success.clientkey
-		self.api.headers['hue-application-key'] = self.key
 		return true, code, self.key, self.clientkey
 	end
 	return false, code, type(r) == "table" and type(r.error) == "table" and r.error.description or nil
@@ -165,10 +178,34 @@ local function nearest(px, py, ax, ay, bx, by)
 	return ax + t * dx, ay + t * dy
 end
 
--- gamut is "A", "B", "C", or a red/green/blue triangle.
+local function point(p)
+	if type(p) ~= "table" then return nil end
+	if p.x ~= nil and p.y ~= nil then return p.x, p.y end
+	if p[1] ~= nil and p[2] ~= nil then return p[1], p[2] end
+end
+
+local function triangle(gamut)
+	if type(gamut) == "string" then gamut = _M.gamut[gamut] end
+	if type(gamut) ~= "table" then return nil end
+	if type(gamut.red) == "table" and type(gamut.green) == "table" and type(gamut.blue) == "table" then
+		gamut = { gamut.red, gamut.green, gamut.blue }
+	end
+	if type(gamut[1]) ~= "table" or type(gamut[2]) ~= "table" or type(gamut[3]) ~= "table" then
+		return nil
+	end
+	local t = {}
+	for i = 1, 3 do
+		local x, y = point(gamut[i])
+		if x == nil or y == nil then return nil end
+		t[i] = { x, y }
+	end
+	return t
+end
+
+-- gamut is "A", "B", "C", an array triangle, or light.color.gamut ({red, green, blue}).
 function _M.clamp(x, y, gamut)
-	local t = _M.gamut[gamut] or gamut
-	if type(t) ~= "table" or not t[3] then return nil, "unknown gamut" end
+	local t = triangle(gamut)
+	if not t then return nil, "unknown gamut" end
 	local w1, w2, w3 = bary(x, y, t)
 	if w1 >= -1e-8 and w2 >= -1e-8 and w3 >= -1e-8 then return x, y end
 	local bx, by, bd = x, y, math.huge
@@ -264,7 +301,7 @@ function hb:resources() return self.api:get("/resource") end
 function hb:set(rtype, id, fields)
 	local body = _M.state(fields)
 	if rtype ~= "light" then body.effects, body.gradient, body.timed_effects = nil end
-	return self.api:put("/resource/" .. rtype .. "/" .. id, body)
+	return check(self.api:put("/resource/" .. rtype .. "/" .. id, body))
 end
 
 function hb:light_on(id, on) return self:set("light", id, { on = on }) end
@@ -277,7 +314,7 @@ function hb:light_temperature(id, t)
 	return self:set("light", id, { mirek = t })
 end
 function hb:identify(rtype, id)
-	return self.api:put("/resource/" .. rtype .. "/" .. id, { identify = { action = "identify" } })
+	return check(self.api:put("/resource/" .. rtype .. "/" .. id, { identify = { action = "identify" } }))
 end
 
 local function bind(resource, bridge)
@@ -299,7 +336,7 @@ end
 function hrm:update(body)
 	local b = link[self]
 	if not b then return nil, "unbound resource" end
-	return b.api:put("/resource/" .. self.type .. "/" .. self.id, body)
+	return check(b.api:put("/resource/" .. self.type .. "/" .. self.id, body))
 end
 
 function hrm:apply(fields)
@@ -326,7 +363,7 @@ function hrm:remove()
 	local b = link[self]
 	local fn = b and b[self.type .. "_delete"]
 	if not fn then return nil, "not deletable" end
-	return fn(b, self.id)
+	return check(fn(b, self.id))
 end
 
 local function index_by_id(bridge, rows)

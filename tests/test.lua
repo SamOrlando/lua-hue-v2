@@ -176,6 +176,14 @@ test("color, mirek, and state bodies", function()
 	w3 = 1 - w1 - w2
 	assert(w1 >= -1e-8 and w2 >= -1e-8 and w3 >= -1e-8)
 	eq(select(1, hue.clamp(0.3, 0.3, "nope")), nil)
+	local named = {
+		red = { x = t[1][1], y = t[1][2] },
+		green = { x = t[2][1], y = t[2][2] },
+		blue = { x = t[3][1], y = t[3][2] },
+	}
+	local nx, ny = hue.clamp(x, y, named); eq(nx, x); eq(ny, y)
+	local nax, nay = hue.clamp(0.01, 0.01, named)
+	assert(math.abs(nax - ox) < 1e-9 and math.abs(nay - oy) < 1e-9)
 	local s = hue.state({ on = false, brightness = 0, kelvin = 2700, xy = { x = 0.4, y = 0.5 }, effect = "candle", alert = "breathe", duration = 200 })
 	eq(s.on.on, false); eq(s.dimming.brightness, 0); eq(s.color_temperature.mirek, 370)
 	eq(s.color.xy.x, 0.4); eq(s.effects.effect, "candle"); eq(s.alert.action, "breathe"); eq(s.dynamics.duration, 200)
@@ -212,6 +220,28 @@ test("set, color, recall, identify, and cached resource verbs", function()
 	b.data.scene.S1:remove(); eq(log[#log].m, "DELETE"); assert(log[#log].url:find("/resource/scene/S1$"))
 	local kept, err = b.data.light.L1:remove(); eq(kept, nil); eq(err, "not deletable")
 	local nope, why = b.data.room.R1:turn(true); eq(nope, nil); eq(why, "not a light")
+end)
+
+test("light_on surfaces a hue error", function()
+	local routes = setmetatable({
+		["PUT /clip/v2/resource/light/BAD"] = function()
+			return 200, { data = {}, errors = { { description = "bad brightness" } } }
+		end,
+	}, { __index = default_routes })
+	local b = mk({ key = "K", routes = routes })
+	local body, err, code = b:light_on("BAD", true)
+	eq(body, nil); eq(err, "bad brightness"); eq(code, 200)
+	eq(type(b:light_on("L1", true)), "table")
+end)
+
+test("assigning b.key updates the header", function()
+	local b, log = mk({})
+	b.key = "ZZ"
+	b:lights(); eq(hdr(log[#log], "hue-application-key"), "ZZ"); eq(b.key, "ZZ")
+	b.key = nil
+	b:lights(); eq(hdr(log[#log], "hue-application-key"), nil); eq(b.key, nil)
+	local ok = b:register("K"); eq(ok, true); eq(b.key, "K")
+	b:lights(); eq(hdr(log[#log], "hue-application-key"), "K")
 end)
 
 test("no globals leaked", function()

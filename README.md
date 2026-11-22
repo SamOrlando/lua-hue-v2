@@ -6,7 +6,7 @@ Philips Hue **CLIP API v2** client for Lua 5.1–5.4 and LuaJIT, built on
 ## Install
 
 ```sh
-luarocks make rockspecs/lua-hue-v2-0.2.0-1.rockspec
+luarocks make rockspecs/lua-hue-v2-0.2.2-1.rockspec
 ```
 
 ## Quick start
@@ -33,10 +33,11 @@ b:light_temperature("<light id>", 2700)          -- kelvin above 500; 153-500 is
 b:scene("<scene id>", hue.recall("active"))
 ```
 
-Examples below assume `hue` and `b` from the quick start. Names such as `id`, `light_id`, and `room_id` stand for ids you already have. A raw call returns a
+Examples below assume `hue` and `b` from the quick start. Names such as `id`, `light_id`, and `room_id` stand for ids you already have. A generated catalog call (`b:lights()`, `b:light(id, body)`, `_create`, `_delete`) returns a
 [lua-jsonreq](https://github.com/SamOrlando/lua-jsonreq) result: `body, code, headers, raw`, or
-`nil, err`. `walk` and `hue.check` turn a Hue `errors` array or an HTTP status >= 400 into
-`nil, err, code, errors`.
+`nil, err`. `walk`, `hue.check`, `b:set`, the `light_*` helpers, `b:identify`, and cached writes
+(`update`, `apply`, `turn`, `activate`, `stream`, `remove`) return `body, code`, or
+`nil, err, code, errors` when the body has a Hue `errors` array or the HTTP status is >= 400.
 
 `GET /eventstream/clip/v2` is the bridge event stream. This client does not keep that connection open.
 `b.api:get("/eventstream/clip/v2")` is a normal request, not a stream.
@@ -47,13 +48,13 @@ These live on the table returned by `require("hue-v2")`.
 
 | name | what it is |
 |---|---|
-| `hue._VERSION` | `"lua-hue-v2 0.2.0"` |
+| `hue._VERSION` | `"lua-hue-v2 0.2.2"` |
 | `hue._DESCRIPTION` | one-line description of the module |
 | `hue._COPYRIGHT` | copyright string stored on the module |
-| `hue.meta.hb` | metatable of every bridge from `hue.new`. `__index` is `hue.meta.hb.methods` |
+| `hue.meta.hb` | metatable of every bridge from `hue.new`. Methods come from `hue.meta.hb.methods`. `b.key` is read and written through this metatable so the header stays in step |
 | `hue.meta.hr` | metatable of every resource stored by `walk`. `__index` is `hue.meta.hr.methods` |
 | `hue.collections` | name → CLIP type. Both `"lights"` and `"light"` map to `"light"`. `walk` and `get` use this table, and it is the source of the `b.data.lights` alias |
-| `hue.gamut` | triangles for gamut `"A"`, `"B"`, and `"C"`. Each is `{ red, green, blue }`, and each point is `{ x, y }` from the CLIP color spec. `"other"` is not a triangle |
+| `hue.gamut` | triangles for gamut `"A"`, `"B"`, and `"C"`. Each is an array of three numeric `{x, y}` pairs (red, green, blue). `"other"` is not a triangle |
 
 ```lua
 print(hue._VERSION)
@@ -72,7 +73,7 @@ print(getmetatable(b) == hue.meta.hb)
 |---|---|
 | `b.api` | jsonreq client for `https://<host>/clip/v2`. Resource calls go through this |
 | `b.base` | jsonreq client for `https://<host>`. `register()` posts to `/api` on this client |
-| `b.key` | application key. At construction, a non-nil key is copied to `b.api.headers["hue-application-key"]` |
+| `b.key` | application key. A string is copied to `b.api.headers["hue-application-key"]`. `nil` or any other value clears that header. This holds for `hue.new`, `b.key = ...`, and `b:register` |
 | `b.clientkey` | entertainment client key, stored only. Streaming does not use it |
 | `b.devicetype` | `app#device` string sent by `register()`. Default is `lua-hue-v2#` plus up to 19 characters of `HOSTNAME` or `COMPUTERNAME`, or `lua` |
 | `b.enabled` | the boolean passed into both clients when the bridge was built. Writing `b.enabled` later does not change those clients |
@@ -84,7 +85,10 @@ print(b.devicetype)
 local same = b.data.lights == b.data.light   -- true after walk()
 ```
 
-Assigning `b.key = "..."` does not update the header. Call `b:register(key)` for that.
+```lua
+b.key = os.getenv("HUE_KEY")   -- header updates with the field
+b.key = nil                    -- header is removed
+```
 
 **TLS:** the bridge uses a self-signed certificate. Requests use luasec's default
 `verify = "none"`, so the certificate is not verified (no MITM protection on the LAN).
@@ -163,15 +167,14 @@ print(hue.kelvin(370))    -- 2703
 
 ## `hue.clamp(x, y, gamut)`
 
-Projects xy into a Hue triangle. `gamut` is `"A"`, `"B"`, `"C"`, or a three-point table of the same shape as `hue.gamut.C`. A point already inside is returned unchanged. An unknown gamut returns `nil, "unknown gamut"`.
+Projects xy into a Hue triangle. `gamut` is `"A"`, `"B"`, `"C"`, an array of three points like `hue.gamut.C`, or the table on `light.color.gamut` (`red`, `green`, and `blue`, each `{ x, y }` or a numeric pair). A point already inside is returned unchanged. `"other"`, or a table that is not a triangle, returns `nil, "unknown gamut"`.
 
 ```lua
 local lamp = b:get(light_id, "light")
-local gamut = lamp.color and lamp.color.gamut_type
-if gamut ~= "A" and gamut ~= "B" and gamut ~= "C" then gamut = "C" end
+local triangle = (lamp.color and lamp.color.gamut) or "C"
 -- A nested call keeps only its first return, so split xy and clamp.
 local x0, y0 = hue.xy(255, 140, 40)
-local x, y = hue.clamp(x0, y0, gamut)
+local x, y = hue.clamp(x0, y0, triangle)
 b:light_color(lamp.id, x, y)
 ```
 
@@ -271,7 +274,7 @@ local light2 = b:get(id, "light")  -- prefer the light bucket
 
 ## `b:set(type, id, fields)`
 
-`PUT /resource/<type>/<id>` with `hue.state(fields)`. For any type other than `"light"`, `effects`, `gradient`, and `timed_effects` are removed before the request. Returns the raw jsonreq result.
+`PUT /resource/<type>/<id>` with `hue.state(fields)`. For any type other than `"light"`, `effects`, `gradient`, and `timed_effects` are removed before the request. The result goes through `hue.check`: `body, code`, or `nil, err, code, errors`. The `light_*` helpers return that same result.
 
 ```lua
 b:set("grouped_light", grouped_id, { on = true, brightness = 40, mirek = 300 })
@@ -324,7 +327,7 @@ b:light_temperature(id, 370)    -- mirek
 
 ## `b:identify(type, id)`
 
-`PUT` `{ identify = { action = "identify" } }` to that resource. Devices and lights use this to flash.
+`PUT` `{ identify = { action = "identify" } }` to that resource. Devices and lights use this to flash. The result goes through `hue.check`.
 
 ```lua
 b:identify("device", device_id)
@@ -468,7 +471,7 @@ if device then print(device:label()) end
 
 ### `resource:update(body)`
 
-`PUT /resource/<type>/<id>` with the table you pass. The body is not rewritten.
+`PUT /resource/<type>/<id>` with the table you pass. The body is not rewritten. The result goes through `hue.check`. An unbound resource returns `nil, "unbound resource"` and does not call the bridge. `apply`, `turn`, `activate`, and `stream` use this path or `b:set`, so their HTTP results are checked too.
 
 ```lua
 light:update({ metadata = { name = "Desk lamp" } })
@@ -514,7 +517,7 @@ area:stream("stop")
 
 ### `resource:remove()`
 
-Calls `b:<type>_delete(id)` when that method exists (`scene`, `smart_scene`, `room`, `zone`, `device`). Other types return `nil, "not deletable"`.
+Calls `b:<type>_delete(id)` when that method exists (`scene`, `smart_scene`, `room`, `zone`, `device`) and passes the result through `hue.check`. Other types return `nil, "not deletable"` and do not call the bridge. The generated `b:scene_delete(id)` itself stays a raw jsonreq result.
 
 ```lua
 scene:remove()
